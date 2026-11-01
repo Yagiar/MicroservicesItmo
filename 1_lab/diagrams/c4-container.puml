@@ -1,0 +1,86 @@
+@startuml c4-container
+!include <C4/C4_Container>
+
+title C4, уровень 2: контейнеры логистической платформы
+
+Person(customer, "Клиент", "Грузоотправитель или грузополучатель")
+Person(dispatcher, "Диспетчер", "Управляет автопарком, рейсами и тарифами")
+Person(driver, "Водитель", "Мобильное приложение")
+
+System_Ext(telematics, "Телематика", "GPS-трекеры транспорта")
+System_Ext(idp, "Identity Provider", "Токены, профили и контакты клиентов")
+System_Ext(maps, "Картографический сервис", "Геокодинг и матрица расстояний")
+System_Ext(comms, "Провайдеры связи", "SMS, e-mail, push")
+
+System_Boundary(platform, "Логистическая платформа") {
+  Container(gateway, "API Gateway", "Kong", "Аутентификация, лимиты запросов, маршрутизация. Без бизнес-логики")
+
+  Container(shipment_svc, "Shipment Service", "REST API", "Заказы перевозки и грузы, жизненный цикл заказа")
+  ContainerDb(shipment_db, "Shipment DB", "PostgreSQL", "Shipment, Cargo, outbox")
+
+  Container(pricing_svc, "Pricing Service", "REST API", "Расчёт стоимости, версии тарифов")
+  ContainerDb(pricing_db, "Pricing DB", "PostgreSQL", "Tariff, Quote")
+
+  Container(route_svc, "Route Service", "REST API, воркеры", "Планирование маршрутов, назначение рейсов")
+  ContainerDb(route_db, "Route DB", "PostgreSQL + PostGIS", "Route, проекция доступности, outbox")
+
+  Container(fleet_svc, "Fleet Service", "REST API", "Учёт транспорта и водителей, бронирование")
+  ContainerDb(fleet_db, "Fleet DB", "PostgreSQL", "Vehicle, Driver, Reservation, outbox")
+
+  Container(tracking_ingest, "Tracking Ingest", "REST API", "Принимает телеметрию и вехи, пишет в Kafka")
+  Container(tracking_writer, "Tracking Writer", "Kafka consumer", "Сохраняет события, выделяет вехи")
+  Container(tracking_query, "Tracking Query", "REST API", "Текущая позиция и история")
+  ContainerDb(tracking_db, "Tracking Store", "Cassandra", "TrackingEvent, TTL 90 дней")
+  ContainerDb(tracking_cache, "Latest Positions", "Redis", "Последняя позиция транспорта")
+
+  Container(notification_svc, "Notification Service", "Kafka consumer, REST API", "Формирование и доставка уведомлений")
+  ContainerDb(notification_db, "Notification DB", "PostgreSQL", "Notification, настройки получателей")
+
+  ContainerQueue(kafka, "Kafka", "RF=3, min.insync.replicas=2", "Доменные события и поток телеметрии")
+}
+
+Rel(customer, gateway, "Стоимость, заказы, отслеживание", "HTTPS")
+Rel(dispatcher, gateway, "Автопарк, рейсы, тарифы", "HTTPS")
+Rel(driver, gateway, "Геопозиция и вехи", "HTTPS")
+Rel(telematics, gateway, "Геопозиция", "HTTPS")
+Rel(gateway, idp, "Проверяет токены", "HTTPS")
+
+Rel(gateway, shipment_svc, "Заказы", "REST")
+Rel(gateway, pricing_svc, "Котировки и тарифы", "REST")
+Rel(gateway, route_svc, "Маршруты", "REST")
+Rel(gateway, fleet_svc, "Автопарк", "REST")
+Rel(gateway, tracking_ingest, "Телеметрия", "REST")
+Rel(gateway, tracking_query, "Позиция и история", "REST")
+Rel(gateway, notification_svc, "История и настройки", "REST")
+
+Rel(shipment_svc, pricing_svc, "Проверяет котировку", "REST")
+Rel(pricing_svc, route_svc, "Оценивает расстояние", "REST")
+Rel(route_svc, fleet_svc, "Бронирует ТС и водителя", "REST")
+Rel(notification_svc, fleet_svc, "Получает контакт водителя", "REST")
+
+Rel(route_svc, maps, "Координаты и расстояния", "HTTPS")
+Rel(notification_svc, comms, "Отправляет сообщения", "HTTPS")
+Rel(notification_svc, idp, "Получает контакт клиента", "HTTPS")
+
+Rel(shipment_svc, shipment_db, "Читает и пишет", "SQL")
+Rel(pricing_svc, pricing_db, "Читает и пишет", "SQL")
+Rel(route_svc, route_db, "Читает и пишет", "SQL")
+Rel(fleet_svc, fleet_db, "Читает и пишет", "SQL")
+Rel(notification_svc, notification_db, "Читает и пишет", "SQL")
+Rel(tracking_writer, tracking_db, "Пишет события", "CQL")
+Rel(tracking_writer, tracking_cache, "Обновляет позицию", "RESP")
+Rel(tracking_query, tracking_db, "Читает историю", "CQL")
+Rel(tracking_query, tracking_cache, "Читает позицию", "RESP")
+
+Rel(shipment_svc, kafka, "Публикует shipment.events")
+Rel(kafka, shipment_svc, "Доставляет route.events, tracking.milestones")
+Rel(route_svc, kafka, "Публикует route.events")
+Rel(kafka, route_svc, "Доставляет shipment.events, fleet.events")
+Rel(fleet_svc, kafka, "Публикует fleet.events")
+Rel(tracking_ingest, kafka, "Публикует tracking.positions")
+Rel(kafka, tracking_writer, "Доставляет tracking.positions, route.events")
+Rel(tracking_writer, kafka, "Публикует tracking.milestones")
+Rel(kafka, notification_svc, "Доставляет shipment.events, route.events, tracking.milestones")
+
+SHOW_LEGEND()
+@enduml

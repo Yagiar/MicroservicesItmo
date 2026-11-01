@@ -1,0 +1,55 @@
+@startuml context-map
+
+title Context Map — логистическая платформа (вариант 2226)
+
+left to right direction
+skinparam shadowing false
+skinparam rectangle {
+  BackgroundColor<<core>> #FFE8CC
+  BackgroundColor<<supporting>> #DCEBFF
+  BackgroundColor<<generic>> #EDEDED
+  BackgroundColor<<external>> #FFFFFF
+  BorderColor<<external>> #888888
+}
+
+rectangle "Shipment Management\nзаказы перевозки, грузы" as shipment <<core>>
+rectangle "Route Planning\nмаршруты, назначение рейсов" as route <<core>>
+rectangle "Tracking\nотслеживание" as tracking <<core>>
+rectangle "Pricing\nрасчёт стоимости, тарифы" as pricing <<supporting>>
+rectangle "Fleet Management\nтранспорт, водители" as fleet <<supporting>>
+rectangle "Notification\nуведомления" as notification <<generic>>
+
+rectangle "Телематика\nGPS-трекеры" as telematics <<external>>
+rectangle "Картографический сервис" as maps <<external>>
+rectangle "Провайдеры связи\nSMS, e-mail, push" as comms <<external>>
+rectangle "Identity Provider\nпрофили клиентов" as idp <<external>>
+
+' Синхронные вызовы
+shipment --> pricing : Customer/Supplier\nпроверка и фиксация котировки\nREST
+pricing --> route : Customer/Supplier\nоценка расстояния и времени\nREST
+route --> fleet : Customer/Supplier\nбронирование ТС и водителя\nREST
+notification --> fleet : Customer/Supplier\nконтакт водителя\nREST
+
+' События
+shipment ..> route : Partnership\nShipmentConfirmed, ShipmentCancelled,\nShipmentStatusChanged\nKafka
+route ..> shipment : Partnership\nRouteAssigned, RouteAssignmentFailed\nKafka
+fleet ..> route : Published Language\nизменение статуса ТС и водителя\nKafka
+route ..> tracking : Published Language\nпривязка ТС к заказу\nKafka
+tracking ..> shipment : Published Language\nвехи доставки\nKafka
+shipment ..> notification : Conformist\nстатусы заказа\nKafka
+route ..> notification : Conformist\nназначение рейса\nKafka
+tracking ..> notification : Conformist\nвехи доставки\nKafka
+
+' Внешние системы
+telematics --> tracking : ACL\nнормализация форматов GPS\nHTTPS
+route --> maps : ACL\nгеокодинг и расстояния\nHTTPS
+notification --> comms : ACL\nотправка сообщений\nHTTPS
+notification --> idp : ACL\nконтакт клиента\nHTTPS
+
+legend right
+  Сплошная стрелка: синхронный вызов, от вызывающего к вызываемому
+  Пунктирная стрелка: событие Kafka, от издателя к подписчику
+  Стереотип: тип поддомена (core, supporting, generic) или внешняя система
+endlegend
+
+@enduml
