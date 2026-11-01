@@ -27,11 +27,13 @@ System_Boundary(platform, "Логистическая платформа") {
   Container(fleet_svc, "Fleet Service", "REST API", "Учёт транспорта и водителей, бронирование")
   ContainerDb(fleet_db, "Fleet DB", "PostgreSQL", "Vehicle, Driver, Reservation, outbox")
 
-  Container(tracking_ingest, "Tracking Ingest", "REST API", "Принимает телеметрию и вехи, пишет в Kafka")
-  Container(tracking_writer, "Tracking Writer", "Kafka consumer", "Сохраняет события, выделяет вехи")
-  Container(tracking_query, "Tracking Query", "REST API", "Текущая позиция и история")
-  ContainerDb(tracking_db, "Tracking Store", "Cassandra", "TrackingEvent, TTL 90 дней")
-  ContainerDb(tracking_cache, "Latest Positions", "Redis", "Последняя позиция транспорта")
+  Boundary(tracking_group, "Tracking Service", "три развёртывания одного сервиса") {
+    Container(tracking_ingest, "Tracking Ingest", "REST API", "Принимает телеметрию и вехи, пишет в Kafka")
+    Container(tracking_writer, "Tracking Writer", "Kafka consumer", "Сохраняет события, выделяет вехи")
+    Container(tracking_query, "Tracking Query", "REST API", "Текущая позиция и история")
+    ContainerDb(tracking_db, "Tracking Store", "Cassandra", "TrackingEvent, TTL 90 дней")
+    ContainerDb(tracking_cache, "Latest Positions", "Redis", "Последняя позиция транспорта")
+  }
 
   Container(notification_svc, "Notification Service", "Kafka consumer, REST API", "Формирование и доставка уведомлений")
   ContainerDb(notification_db, "Notification DB", "PostgreSQL", "Notification, настройки получателей")

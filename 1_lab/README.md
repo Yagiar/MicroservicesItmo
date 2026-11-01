@@ -60,7 +60,9 @@
 
 ## 3. Context Map
 
-Диаграмма: [diagrams/context-map.puml](diagrams/context-map.puml).
+![Context Map](diagrams/context-map.png)
+
+Исходник: [diagrams/context-map.puml](diagrams/context-map.puml).
 
 | Upstream | Downstream | Паттерн | Механизм | Назначение |
 |---|---|---|---|---|

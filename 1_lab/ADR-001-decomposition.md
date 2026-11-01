@@ -93,5 +93,14 @@ Shipment (с Cargo), Pricing, Route, Fleet (Vehicle и Driver), Tracking, Notifi
 
 ## Итоговая архитектурная схема (C4)
 
-- Уровень 1, системный контекст: [diagrams/c4-context.puml](diagrams/c4-context.puml)
-- Уровень 2, контейнеры: [diagrams/c4-container.puml](diagrams/c4-container.puml)
+### Уровень 1. Системный контекст
+
+![C4, системный контекст](diagrams/c4-context.png)
+
+Исходник: [diagrams/c4-context.puml](diagrams/c4-context.puml).
+
+### Уровень 2. Контейнеры
+
+![C4, контейнеры](diagrams/c4-container.png)
+
+Исходник: [diagrams/c4-container.puml](diagrams/c4-container.puml).
