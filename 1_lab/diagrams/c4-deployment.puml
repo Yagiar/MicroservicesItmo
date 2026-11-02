@@ -1,0 +1,100 @@
+@startuml c4-deployment
+!include <C4/C4_Deployment>
+
+title C4, развёртывание: три независимых ЦОДа
+
+Person(users, "Пользователи и телематика", "Клиенты, диспетчеры, водители, GPS-трекеры")
+Deployment_Node(gslb, "GSLB", "DNS-балансировщик", "Направляет трафик только в доступные ЦОДы")
+
+Deployment_Node(dc_a, "ЦОД A", "площадка 1, своё питание и каналы") {
+  Deployment_Node(k8s_a, "Kubernetes A", "отдельный кластер") {
+    Container(gw_a, "Балансировщик и шлюзы", "L4 VIP, Kong Ingress Controller, HPA", "Public и Ingest Gateway, распределяют запросы между готовыми подами")
+    Container(apps_a, "6 сервисов", "Deployment + HPA", "Число подов меняется по метрикам, пишут в лидер БД, читают локальные реплики")
+    Container(mon_a, "Мониторинг", "Prometheus, Alertmanager, Grafana", "Метрики ЦОДа, алерты, дашборды")
+  }
+  ContainerDb(pg_a, "PostgreSQL, лидер", "Patroni", "5 кластеров, по одному на сервис")
+  ContainerDb(cass_a, "Cassandra", "реплика 1 из 3", "Tracking, запись и чтение QUORUM")
+  ContainerQueue(kafka_a, "Kafka", "брокер, rack A", "Реплика каждой партиции")
+  ContainerDb(redis_a, "Redis, master", "Sentinel", "Последние позиции")
+  Deployment_Node(etcd_a, "etcd", "узел кворума Patroni")
+}
+
+Deployment_Node(dc_b, "ЦОД B", "площадка 2, своё питание и каналы") {
+  Deployment_Node(k8s_b, "Kubernetes B", "отдельный кластер") {
+    Container(gw_b, "Балансировщик и шлюзы", "L4 VIP, Kong Ingress Controller, HPA", "Public и Ingest Gateway, распределяют запросы между готовыми подами")
+    Container(apps_b, "6 сервисов", "Deployment + HPA", "Число подов меняется по метрикам, пишут в лидер БД, читают локальные реплики")
+    Container(mon_b, "Мониторинг", "Prometheus, Alertmanager, Grafana", "Метрики ЦОДа, алерты, дашборды")
+  }
+  ContainerDb(pg_b, "PostgreSQL, реплика", "Patroni", "Кандидат на роль лидера")
+  ContainerDb(cass_b, "Cassandra", "реплика 2 из 3", "Tracking, запись и чтение QUORUM")
+  ContainerQueue(kafka_b, "Kafka", "брокер, rack B", "Реплика каждой партиции")
+  ContainerDb(redis_b, "Redis, реплика", "Sentinel", "Последние позиции")
+  Deployment_Node(etcd_b, "etcd", "узел кворума Patroni")
+}
+
+Deployment_Node(dc_c, "ЦОД C", "площадка 3, своё питание и каналы") {
+  Deployment_Node(k8s_c, "Kubernetes C", "отдельный кластер") {
+    Container(gw_c, "Балансировщик и шлюзы", "L4 VIP, Kong Ingress Controller, HPA", "Public и Ingest Gateway, распределяют запросы между готовыми подами")
+    Container(apps_c, "6 сервисов", "Deployment + HPA", "Число подов меняется по метрикам, пишут в лидер БД, читают локальные реплики")
+    Container(mon_c, "Мониторинг", "Prometheus, Alertmanager, Grafana", "Метрики ЦОДа, алерты, дашборды")
+  }
+  ContainerDb(pg_c, "PostgreSQL, реплика", "Patroni", "Кандидат на роль лидера")
+  ContainerDb(cass_c, "Cassandra", "реплика 3 из 3", "Tracking, запись и чтение QUORUM")
+  ContainerQueue(kafka_c, "Kafka", "брокер, rack C", "Реплика каждой партиции")
+  ContainerDb(redis_c, "Redis, реплика", "Sentinel", "Последние позиции")
+  Deployment_Node(etcd_c, "etcd", "узел кворума Patroni")
+}
+
+Deployment_Node(region2, "Другой регион", "объектное хранилище") {
+  ContainerDb(backup, "Резервные копии", "S3", "WAL-архив PostgreSQL и снапшоты Cassandra, восстановление на момент времени")
+}
+
+Rel(users, gslb, "Запросы", "HTTPS")
+Rel(gslb, gw_a, "Запросы", "HTTPS")
+Rel(gslb, gw_b, "Запросы", "HTTPS")
+Rel(gslb, gw_c, "Запросы", "HTTPS")
+
+Rel(gw_a, apps_a, "К готовым подам", "least connections")
+Rel(gw_b, apps_b, "К готовым подам", "least connections")
+Rel(gw_c, apps_c, "К готовым подам", "least connections")
+Rel(mon_a, apps_a, "Метрики для HPA и дашбордов", "/metrics")
+Rel(mon_b, apps_b, "Метрики для HPA и дашбордов", "/metrics")
+Rel(mon_c, apps_c, "Метрики для HPA и дашбордов", "/metrics")
+
+Rel(apps_b, pg_a, "Запись", "SQL")
+Rel(apps_c, pg_a, "Запись", "SQL")
+Rel_L(pg_a, pg_b, "WAL", "синхронно, ANY 1")
+Rel_R(pg_a, pg_c, "WAL", "синхронно, ANY 1")
+Rel_L(redis_a, redis_b, "Репликация", "асинхронно")
+Rel_R(redis_a, redis_c, "Репликация", "асинхронно")
+
+Rel(pg_a, backup, "WAL-архив", "непрерывно")
+Rel(cass_a, backup, "Снапшоты", "ежедневно")
+
+' Раскладка: ЦОДы тремя колонками, A в центре, внутри ЦОДа один порядок сверху вниз
+Lay_R(gw_b, gw_a)
+Lay_R(gw_a, gw_c)
+Lay_D(gw_a, apps_a)
+Lay_R(apps_a, mon_a)
+Lay_D(apps_a, pg_a)
+Lay_D(pg_a, redis_a)
+Lay_D(redis_a, kafka_a)
+Lay_D(kafka_a, cass_a)
+Lay_D(cass_a, etcd_a)
+Lay_D(gw_b, apps_b)
+Lay_R(apps_b, mon_b)
+Lay_D(apps_b, pg_b)
+Lay_D(pg_b, redis_b)
+Lay_D(redis_b, kafka_b)
+Lay_D(kafka_b, cass_b)
+Lay_D(cass_b, etcd_b)
+Lay_D(gw_c, apps_c)
+Lay_R(apps_c, mon_c)
+Lay_D(apps_c, pg_c)
+Lay_D(pg_c, redis_c)
+Lay_D(redis_c, kafka_c)
+Lay_D(kafka_c, cass_c)
+Lay_D(cass_c, etcd_c)
+
+SHOW_LEGEND()
+@enduml
