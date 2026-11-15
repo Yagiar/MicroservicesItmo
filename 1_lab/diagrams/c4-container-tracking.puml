@@ -1,0 +1,42 @@
+@startuml c4-container-tracking
+!include <C4/C4_Container>
+
+title C4, уровень 2: отслеживание
+
+Person(customer, "Клиент или диспетчер", "Смотрит позицию и историю")
+Person(driver, "Водитель", "Мобильное приложение")
+System_Ext(telematics, "Телематика", "GPS-трекеры транспорта")
+
+Container(ingest_gw, "Ingest Gateway", "Kong без БД", "Только POST /tracking/events")
+Container(public_gw, "Public Gateway", "Kong без БД", "Остальной API")
+
+Boundary(tracking_group, "Tracking Service", "три развёртывания одного сервиса") {
+  Container(tracking_ingest, "Tracking Ingest", "REST API", "Принимает телеметрию и вехи, пишет в Kafka")
+  Container(tracking_writer, "Tracking Writer", "Kafka consumer", "Сохраняет события, выделяет вехи")
+  Container(tracking_query, "Tracking Query", "REST API", "Текущая позиция и история")
+  ContainerDb(tracking_db, "Tracking Store", "Cassandra", "TrackingEvent, TTL 90 дней")
+  ContainerDb(tracking_cache, "Latest Positions", "Redis", "Последняя позиция транспорта")
+}
+
+ContainerQueue(kafka, "Kafka", "Apache Kafka", "tracking.positions, tracking.milestones, route.events")
+Container(consumers, "Shipment, Notification", "подписчики", "Получают вехи доставки")
+Container(route_planner, "Route Planner", "воркер Kafka", "Публикует привязку ТС к заказу")
+
+Rel(driver, ingest_gw, "Геопозиция и вехи", "HTTPS")
+Rel(telematics, ingest_gw, "Геопозиция", "HTTPS")
+Rel(customer, public_gw, "Отслеживание", "HTTPS")
+Rel(ingest_gw, tracking_ingest, "Телеметрия", "REST")
+Rel(public_gw, tracking_query, "Позиция и история", "REST")
+
+Rel(tracking_ingest, kafka, "tracking.positions")
+Rel(route_planner, kafka, "route.events")
+Rel(kafka, tracking_writer, "tracking.positions, route.events")
+Rel(tracking_writer, tracking_db, "Пишет события", "CQL")
+Rel(tracking_writer, tracking_cache, "Обновляет позицию", "RESP")
+Rel(tracking_writer, kafka, "tracking.milestones")
+Rel(kafka, consumers, "tracking.milestones")
+Rel(tracking_query, tracking_db, "Читает историю", "CQL")
+Rel(tracking_query, tracking_cache, "Читает позицию", "RESP")
+
+SHOW_LEGEND()
+@enduml

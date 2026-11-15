@@ -1,0 +1,30 @@
+@startuml c4-container-notification
+!include <C4/C4_Container>
+
+title C4, уровень 2: уведомления
+
+Person(recipient, "Получатель", "Клиент или водитель: история, настройки, устройства")
+Person(dispatcher, "Диспетчер", "Ручные сообщения, шаблоны")
+System_Ext(idp, "Identity Provider", "Контакты клиентов")
+System_Ext(comms, "Провайдеры связи", "SMS, e-mail, push; webhook статуса доставки")
+
+Container(public_gw, "Public Gateway", "Kong без БД", "Маршрутизация и лимиты")
+ContainerQueue(kafka, "Kafka", "Apache Kafka", "shipment.events, route.events, tracking.milestones")
+
+Container(notification_svc, "Notification Service", "воркер Kafka, REST API", "Шаблоны, доставка по каналам, повторы, статусы")
+ContainerDb(notification_db, "Notification DB", "PostgreSQL", "Notification, Preference, Template, Device")
+Container(fleet_svc, "Fleet Service", "REST API", "Контакт водителя")
+
+Rel(recipient, public_gw, "История, настройки, push-токены", "HTTPS")
+Rel(dispatcher, public_gw, "Сообщения, шаблоны", "HTTPS")
+Rel(public_gw, notification_svc, "REST")
+Rel(comms, public_gw, "Статус доставки", "HTTPS, подписанный webhook")
+
+Rel(kafka, notification_svc, "Поводы для уведомлений")
+Rel(notification_svc, notification_db, "Читает и пишет", "SQL")
+Rel(notification_svc, fleet_svc, "Контакт водителя", "REST")
+Rel(notification_svc, idp, "Контакт клиента", "HTTPS, ACL")
+Rel(notification_svc, comms, "Отправляет сообщения", "HTTPS, ACL")
+
+SHOW_LEGEND()
+@enduml

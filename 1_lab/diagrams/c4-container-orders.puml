@@ -1,0 +1,57 @@
+@startuml c4-container-orders
+!include <C4/C4_Container>
+
+title C4, уровень 2: заказ и назначение рейса
+
+Person(customer, "Клиент", "Рассчитывает стоимость, создаёт заказ")
+Person(dispatcher, "Диспетчер", "Тарифы, перепланирование")
+
+Container(public_gw, "Public Gateway", "Kong без БД", "Маршрутизация и лимиты")
+
+Container(shipment_svc, "Shipment Service", "REST API", "Заказы и грузы, жизненный цикл, фиксация цены")
+ContainerDb(shipment_db, "Shipment DB", "PostgreSQL", "Shipment, Cargo, история статусов, outbox")
+
+Container(pricing_svc, "Pricing Service", "REST API", "Котировки, версии тарифов, тарифы в памяти")
+ContainerDb(pricing_db, "Pricing DB", "PostgreSQL", "Tariff, Quote")
+ContainerDb(pricing_cache, "Pricing Cache", "Redis", "Оценки расстояния (TTL 24 ч), котировки (TTL = срок действия)")
+
+Boundary(route_group, "Route Service", "одно приложение, два развёртывания") {
+  Container(route_api, "Route API", "REST API", "Оценка расстояния, просмотр маршрутов, приём перепланирования")
+  Container(route_planner, "Route Planner", "воркер Kafka", "Строит маршрут, бронирует ресурсы, ведёт сагу")
+  ContainerDb(route_db, "Route DB", "PostgreSQL + PostGIS", "Route, проекция доступности, outbox")
+}
+
+Container(fleet_svc, "Fleet Service", "REST API", "Транспорт, водители, бронирование")
+ContainerDb(fleet_db, "Fleet DB", "PostgreSQL", "Vehicle, Driver, Reservation, outbox")
+
+Container(map_svc, "Map Service", "REST API", "Геокодинг, путь, матрица расстояний")
+ContainerQueue(kafka, "Kafka", "Apache Kafka", "shipment.events, route.events, route.planning-requests, fleet.events")
+
+Rel(customer, public_gw, "Стоимость, заказы", "HTTPS")
+Rel(dispatcher, public_gw, "Тарифы, перепланирование", "HTTPS")
+Rel(public_gw, shipment_svc, "Заказы", "REST")
+Rel(public_gw, pricing_svc, "Котировки, тарифы", "REST")
+Rel(public_gw, route_api, "Маршруты, replan", "REST")
+
+Rel(shipment_svc, pricing_svc, "Проверяет котировку", "REST")
+Rel(pricing_svc, pricing_cache, "Читает и наполняет кэш", "RESP")
+Rel(pricing_svc, route_api, "Оценка при промахе кэша", "REST")
+Rel(route_api, map_svc, "Матрица расстояний", "REST")
+Rel(route_planner, map_svc, "Геокодинг и путь", "REST")
+Rel(route_planner, fleet_svc, "Бронирует и освобождает", "REST")
+
+Rel(shipment_svc, shipment_db, "SQL")
+Rel(pricing_svc, pricing_db, "SQL")
+Rel(route_api, route_db, "Читает маршруты, пишет запросы", "SQL")
+Rel(route_planner, route_db, "Пишет маршруты", "SQL")
+Rel(fleet_svc, fleet_db, "SQL")
+
+Rel(shipment_svc, kafka, "shipment.events")
+Rel(kafka, shipment_svc, "route.events, tracking.milestones")
+Rel(route_api, kafka, "route.planning-requests")
+Rel(kafka, route_planner, "shipment.events, fleet.events, route.planning-requests")
+Rel(route_planner, kafka, "route.events")
+Rel(fleet_svc, kafka, "fleet.events")
+
+SHOW_LEGEND()
+@enduml
