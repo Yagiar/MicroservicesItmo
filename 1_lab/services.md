@@ -8,6 +8,8 @@
 - События публикуются через Transactional Outbox, потребители идемпотентны.
 - Каждый сервис сам проверяет JWT и права доступа к своим данным, внутренние вызовы идут с токеном вызывающего сервиса ([README, раздел 4](README.md#4-границы-сервисов-ответственность-и-владение-данными)).
 - Число подов каждого развёртывания меняет HPA по метрике из поля `Scalability`, минимум 2 пода в каждом ЦОДе ([раздел 10 отчёта](README.md#10-балансировка-и-автомасштабирование)).
+- В поле `API` перечислены все бизнес-эндпоинты сервиса и кто их вызывает. Кроме них каждое развёртывание (включая воркеры) отдаёт служебные `GET /health/live`, `GET /health/ready` (для `livenessProbe` и `readinessProbe` Kubernetes) и `GET /metrics` (для Prometheus). Служебные эндпоинты доступны только внутри кластера, шлюзы их наружу не публикуют.
+- Списки возвращаются постранично по курсору (`cursor`, `limit`), ошибки — в формате Problem Details (RFC 9457), создающие запросы принимают заголовок `Idempotency-Key`.
 - Внешний трафик проходит через два шлюза: Ingest Gateway принимает телеметрию, Public Gateway обслуживает остальной API (README, раздел 4). Это инфраструктурные компоненты без бизнес-логики и своих данных, поэтому в каталог они не входят.
 
 **Размещение по ЦОДам.** Все развёртывания и хранилища работают в каждом из трёх ЦОДов, схема репликации описана в [разделе 9 отчёта](README.md#9-размещение-и-репликация). Поэтому в описаниях сервисов это не повторяется. Что это гарантирует и чего не гарантирует:
@@ -60,14 +62,20 @@ Data Owner:
 Команда Orders
 
 API:
-POST /shipments                     создать заказ по quoteId, заголовок Idempotency-Key защищает от дублей
+Клиент (только свои заказы) и диспетчер (все заказы):
+POST /shipments                     создать заказ по quoteId, заголовок Idempotency-Key защищает от дублей;
+                                    201 и статус CONFIRMED или PRICE_PENDING, 422 при просроченной котировке
 GET /shipments/{id}                 заказ с грузом, ценой и текущим статусом
 GET /shipments?customerId={id}&status={status}&from={date}&to={date}&cursor={c}
-                                    список заказов клиента, постраничный
-PATCH /shipments/{id}               изменить контакт, окна или груз до назначения рейса
+                                    список заказов; клиенту customerId подставляется из токена,
+                                    диспетчер может искать по всем клиентам
+PATCH /shipments/{id}               изменить контакт, окна или груз до назначения рейса, 409 после ASSIGNED;
+                                    заголовок If-Match с версией агрегата защищает от одновременной правки
 POST /shipments/{id}/cancel         отмена с указанием причины, 409 после забора груза
-POST /shipments/{id}/reassign       повторное назначение после ASSIGNMENT_FAILED (диспетчер)
-GET /shipments/{id}/history         история статусов
+GET /shipments/{id}/history         история статусов с причинами и временем
+
+Только диспетчер:
+POST /shipments/{id}/reassign       повторное назначение после ASSIGNMENT_FAILED
 
 Dependencies:
 Pricing Service: проверка котировки при создании (таймаут 300 мс, circuit breaker);
@@ -107,10 +115,20 @@ Data Owner:
 Команда Pricing & Comms
 
 API:
-POST /quotes
-GET /quotes/{id}
-GET /tariffs
-POST /tariffs
+Клиент и диспетчер:
+POST /quotes                        рассчитать котировку: точки забора и доставки, груз, тип ТС;
+                                    ответ — цена, версия тарифа, срок действия, признак приближённой оценки
+GET /quotes/{id}                    котировка; клиент видит только свои
+                                    (этот же эндпоинт вызывает Shipment при создании заказа)
+
+Только диспетчер:
+GET /tariffs?activeAt={time}        тарифы, действующие на момент времени (по умолчанию — сейчас)
+GET /tariffs/{id}                   тариф с текущей версией
+GET /tariffs/{id}/versions          история версий тарифа
+POST /tariffs                       создать тариф с первой версией
+POST /tariffs/{id}/versions         опубликовать новую версию, validFrom не раньше чем через 5 минут
+DELETE /tariffs/{id}/versions/{version}
+                                    отменить версию, которая ещё не вступила в силу; 409, если уже действует
 
 Dependencies:
 Route Service: оценка расстояния и времени; если он недоступен, используется приближённая оценка по прямому расстоянию
@@ -123,7 +141,7 @@ REST
 Кэш (cache-aside):
 Оценки расстояния: Redis, ключ — геохеш точки отправления, геохеш точки назначения, тип ТС,
   TTL 24 часа. Повторные расчёты по одному направлению не доходят до Route,
-  поэтому синхронная цепочка Pricing -> Route -> Map срабатывает только при промахе.
+  поэтому синхронная цепочка Pricing -> Route -> Tile Service срабатывает только при промахе.
 Котировки: Redis, ключ quoteId, TTL равен сроку действия котировки.
   Котировка неизменяема, поэтому инвалидация не нужна; проверка котировки
   из Shipment обычно не доходит до PostgreSQL.
@@ -158,17 +176,27 @@ Data Owner:
 Команда Routing
 
 API:
+Внутренний (вызывает Pricing):
 POST /routes/estimate               расстояние и время между двумя точками для типа ТС
-GET /routes/{id}                    маршрут: точки, плановое время, назначенные ТС и водитель
-GET /routes?shipmentId={id}
-POST /routes/{id}/replan            ставит запрос на перепланирование, отвечает 202 Accepted
+
+Клиент (маршрут своего заказа) и диспетчер:
+GET /routes/{id}                    маршрут: точки, плановое время, назначенные ТС и водитель, статус
+GET /routes?shipmentId={id}         маршрут по заказу
+
+Диспетчер и водитель (водитель видит только свои рейсы):
+GET /routes?status={status}&vehicleId={id}&driverId={id}&date={date}&cursor={c}
+                                    рейсы за день, по транспорту или водителю
+
+Только диспетчер:
+POST /routes/{id}/replan            ставит запрос на перепланирование с причиной, отвечает 202 Accepted
+GET /routes/{id}/planning-requests  запросы на перепланирование и их результат
 
 Dependencies:
-Map Service: матрица расстояний для /routes/estimate
+Tile Service: матрица расстояний для /routes/estimate
 
 Communication:
 REST + Kafka
-Синхронно: POST /matrix в Map Service
+Синхронно: POST /matrix в Tile Service
 Публикует: route.planning-requests (внутренний топик, читает только Route Planner)
 
 Scalability:
@@ -200,19 +228,22 @@ Data Owner:
 Команда Routing
 
 API:
-Внешнего API нет. Входы — только топики Kafka, служебный /metrics для Prometheus.
+Бизнес-эндпоинтов нет: входы — только топики Kafka (см. Communication),
+есть лишь служебные /health/live, /health/ready и /metrics.
+Состояние маршрутов, которые строит воркер, читается через Route API.
 
 Dependencies:
-Map Service: геокодинг адресов и матрица расстояний
+Tile Service: геокодинг адресов и матрица расстояний
 Fleet Service: POST /reservations, DELETE /reservations/{id};
-  при ответе 409 берётся следующий кандидат
+  при ответе 409 берётся следующий кандидат;
+  GET /availability только для начального наполнения проекции доступности
 Shipment Service: события заказа (только Kafka)
 
 Communication:
 Kafka + REST
 Потребляет: shipment.events, fleet.events, route.planning-requests
 Публикует: route.events (RouteAssigned, RouteAssignmentFailed)
-Синхронно: Map Service, Fleet Service
+Синхронно: Tile Service, Fleet Service
 Ключ партиции shipmentId: все события одного заказа обрабатывает один экземпляр по порядку.
 Подбор ограничен таймаутом 2 минуты, после него публикуется RouteAssignmentFailed.
 
@@ -241,13 +272,34 @@ Data Owner:
 Команда Fleet
 
 API:
-POST /vehicles
+Диспетчер — транспорт:
+POST /vehicles                      добавить ТС: номер, тип, грузоподъёмность, объём, документы
+GET /vehicles?status={status}&type={type}&cursor={c}
 GET /vehicles/{id}
-POST /drivers
-GET /drivers/{id}
+PATCH /vehicles/{id}                изменить характеристики и документы
+PUT /vehicles/{id}/status           ACTIVE, MAINTENANCE, DECOMMISSIONED; публикует VehicleStatusChanged
+
+Диспетчер — водители:
+POST /drivers                       добавить водителя: ФИО, категории прав, контакты
+GET /drivers?status={status}&cursor={c}
+GET /drivers/{id}                   профиль без контактов
+PATCH /drivers/{id}                 изменить категории прав и данные
+
+Диспетчер и водитель (водитель только про себя):
+PUT /drivers/{id}/status            ON_SHIFT, OFF_SHIFT, SICK_LEAVE; публикует DriverStatusChanged
+
+Внутренние (только с токеном сервиса):
+GET /drivers/{id}/contact           телефон и push-адресат водителя, вызывает только Notification
 GET /availability?from={from}&to={to}&minCapacityKg={kg}
-POST /reservations (идемпотентный, при конфликте возвращает 409)
-DELETE /reservations/{id}
+                                    свободные пары ТС и водитель; Route Planner использует его
+                                    для начального наполнения проекции доступности
+POST /reservations                  забронировать пару на интервал; идемпотентный по Idempotency-Key,
+                                    при конфликте 409; вызывает Route Planner
+DELETE /reservations/{id}           снять бронь (отмена или завершение рейса)
+
+Диспетчер:
+GET /reservations?vehicleId={id}&driverId={id}&from={from}&to={to}
+GET /reservations/{id}
 
 Dependencies:
 Нет синхронных зависимостей от других сервисов
@@ -278,9 +330,25 @@ Data Owner:
 Команда Tracking
 
 API:
-POST /tracking/events (пакетная отправка)
-GET /tracking/shipments/{id}/latest
-GET /tracking/shipments/{id}/events
+Tracking Ingest (через Ingest Gateway; только трекер или водитель):
+POST /tracking/events               пакет отметок: позиции и вехи (груз забран, груз доставлен);
+                                    у каждой отметки eventId, повторная отправка не создаёт дублей;
+                                    ответ 202 после записи в Kafka, 503 при недоступности Kafka
+
+Tracking Query (через Public Gateway):
+Клиент (только свои заказы) и диспетчер:
+GET /tracking/shipments/{id}/latest              последняя позиция транспорта по заказу (Redis)
+GET /tracking/shipments/{id}/events?from={t}&to={t}&cursor={c}
+                                                 история перемещений по заказу (Cassandra)
+GET /tracking/shipments/{id}/milestones          вехи доставки с временем
+
+Только диспетчер:
+GET /tracking/vehicles/{id}/latest               последняя позиция ТС
+GET /tracking/vehicles/latest?ids={id1,id2,...}  последние позиции группы ТС для карты диспетчера
+GET /tracking/vehicles/{id}/events?from={t}&to={t}&cursor={c}
+                                                 история ТС за период, не больше суток за запрос
+
+Tracking Writer: бизнес-эндпоинтов нет, вход — топики Kafka.
 
 Dependencies:
 Route Service: привязка транспорта к заказу (только события)
@@ -331,8 +399,11 @@ DELETE /devices/{id}                    отключить push на устро�
 Диспетчер:
 POST /notifications                     ручное сообщение водителю или клиенту по заказу
 POST /notifications/{id}/resend         повторная отправка, например по другому каналу
-GET /templates
+GET /templates                          список шаблонов по типам событий и каналам
+GET /templates/{eventType}/{channel}    текущая версия шаблона
 PUT /templates/{eventType}/{channel}    новая версия шаблона
+POST /templates/{eventType}/{channel}/preview
+                                        отрисовать шаблон на тестовых данных без отправки
 
 Провайдеры связи (подпись запроса проверяется):
 POST /webhooks/{provider}/delivery-status   подтверждение доставки или ошибка
@@ -346,7 +417,7 @@ Identity Provider: контакт клиента (через ACL)
 Communication:
 Kafka + REST
 Потребляет: shipment.events, route.events, tracking.milestones
-Синхронно: GET /drivers/{id} в Fleet, контакт клиента в Identity Provider, отправка провайдерам
+Синхронно: GET /drivers/{id}/contact в Fleet, контакт клиента в Identity Provider, отправка провайдерам
 Неудачная отправка повторяется с экспоненциальной задержкой, затем пробуется следующий канал из настроек.
 
 Scalability:
@@ -354,10 +425,10 @@ Scalability:
 При сбое уведомления задерживаются, но не теряются: непрочитанные события остаются в Kafka.
 ```
 
-## Map Service
+## Tile Service
 
 ```text
-Service: Map Service
+Service: Tile Service
 
 Responsibility:
 Типовой (generic) картографический сервис внутри платформы:
@@ -375,11 +446,19 @@ Data Owner:
 Команда Routing (основной потребитель)
 
 API:
-GET /tiles/{z}/{x}/{y}.pbf              векторный тайл, Cache-Control с версией набора данных
-GET /geocode?q={address}                адрес в координаты, подсказки при вводе адреса
+Клиент, диспетчер, водитель (через Public Gateway):
+GET /tiles.json                         метаданные тайлов (TileJSON): текущая версия данных, зумы, границы региона
+GET /tiles/{version}/{z}/{x}/{y}.pbf    векторный тайл; версия в пути, поэтому Cache-Control: immutable
+GET /styles/{name}.json                 стиль отрисовки карты для веб-клиента и приложения
+GET /geocode?q={address}&limit={n}      адрес в координаты, подсказки при вводе адреса
 GET /reverse?lat={lat}&lon={lon}        координаты в адрес
-POST /directions                        путь между точками для типа ТС
-POST /matrix                            матрица расстояний и времени
+
+Внутренние (Route API и Route Planner):
+POST /directions                        путь между точками для типа ТС: геометрия, расстояние, время
+POST /matrix                            матрица расстояний и времени, не больше 100 × 100 точек
+
+Служебный (только команда Routing):
+GET /dataset                            версии набора данных: активная, предыдущая, дата выгрузки OSM
 
 Dependencies:
 Нет синхронных зависимостей от других сервисов.
@@ -389,7 +468,8 @@ Communication:
 REST
 Клиенты получают тайлы через Public Gateway, Route API и Route Planner вызывают /matrix, /directions и /geocode.
 Обновление данных: новая версия собирается рядом со старой, проверяется и включается переключением версии,
-откат — переключение обратно.
+откат — переключение обратно. После переключения /tiles.json отдаёт новую версию,
+и клиенты начинают запрашивать тайлы по новым адресам, поэтому кэш не нужно сбрасывать.
 
 Scalability:
 Горизонтальное масштабирование по RPS и CPU, экземпляры не хранят изменяемого состояния.

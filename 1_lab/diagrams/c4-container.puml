@@ -21,7 +21,7 @@ System_Boundary(platform, "Логистическая платформа") {
   Container(route_api, "Route API", "REST", "Оценка, просмотр, перепланирование")
   Container(route_planner, "Route Planner", "воркер Kafka", "Построение маршрута, назначение рейса")
   Container(fleet_svc, "Fleet", "REST", "Транспорт, водители, бронь")
-  Container(map_svc, "Map", "REST", "Тайлы, геокодинг, расстояния")
+  Container(map_svc, "Tile Service", "REST", "Тайлы, геокодинг, расстояния")
   Container(tracking_svc, "Tracking", "Ingest, Writer, Query", "Телеметрия и вехи")
   Container(notification_svc, "Notification", "воркер Kafka, REST", "Уведомления")
 

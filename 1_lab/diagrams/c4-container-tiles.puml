@@ -1,4 +1,4 @@
-@startuml c4-container-map
+@startuml c4-container-tiles
 !include <C4/C4_Container>
 
 title C4, уровень 2: картографический сервис
@@ -9,8 +9,8 @@ Container(public_gw, "Public Gateway", "Kong без БД", "Кэширует т�
 Container(route_api, "Route API", "REST API", "Оценка расстояния")
 Container(route_planner, "Route Planner", "воркер Kafka", "Построение маршрута")
 
-Boundary(map_group, "Map Service", "типовой поддомен, данные только для чтения") {
-  Container(map_api, "Map API", "REST API", "Тайлы, геокодинг, путь, матрица расстояний")
+Boundary(map_group, "Tile Service", "типовой поддомен, данные только для чтения") {
+  Container(map_api, "Tile API", "REST API", "Тайлы, геокодинг, путь, матрица расстояний")
   ContainerDb(map_tiles, "Тайлы и граф дорог", "MBTiles, граф OSRM", "Файлы на томах подов, версия набора данных")
   ContainerDb(map_geo, "Индекс геокодинга", "PostgreSQL + PostGIS", "Адреса и объекты")
   Container(map_import, "Импорт карты", "пакетная задача, раз в неделю", "Собирает новую версию из выгрузки OpenStreetMap, переключает версию")

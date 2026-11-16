@@ -10,15 +10,20 @@ skinparam rectangle {
   BackgroundColor<<generic>> #EDEDED
   BackgroundColor<<external>> #FFFFFF
   BorderColor<<external>> #888888
+  BackgroundColor<<platform>> #FFFFFF
+  BorderColor<<platform>> #444444
+  BorderStyle<<platform>> dashed
 }
 
-rectangle "Shipment Management\nзаказы перевозки, грузы" as shipment <<core>>
-rectangle "Route Planning\nмаршруты, назначение рейсов" as route <<core>>
-rectangle "Tracking\nотслеживание" as tracking <<core>>
-rectangle "Pricing\nрасчёт стоимости, тарифы" as pricing <<supporting>>
-rectangle "Fleet Management\nтранспорт, водители" as fleet <<supporting>>
-rectangle "Notification\nуведомления" as notification <<generic>>
-rectangle "Maps\nтайлы, геокодинг, расстояния" as maps <<generic>>
+rectangle "Логистическая платформа" <<platform>> {
+  rectangle "Shipment Management\nзаказы перевозки, грузы" as shipment <<core>>
+  rectangle "Route Planning\nмаршруты, назначение рейсов" as route <<core>>
+  rectangle "Tracking\nотслеживание" as tracking <<core>>
+  rectangle "Pricing\nрасчёт стоимости, тарифы" as pricing <<supporting>>
+  rectangle "Fleet Management\nтранспорт, водители" as fleet <<supporting>>
+  rectangle "Notification\nуведомления" as notification <<generic>>
+  rectangle "Map Tiles (Tile Service)\nтайлы карты, геокодинг,\nпуть и матрица расстояний\nданные OpenStreetMap" as tiles <<generic>>
+}
 
 rectangle "Телематика\nGPS-трекеры" as telematics <<external>>
 rectangle "Провайдеры связи\nSMS, e-mail, push" as comms <<external>>
@@ -28,7 +33,7 @@ rectangle "Identity Provider\nпрофили клиентов" as idp <<external
 shipment --> pricing : Customer/Supplier\nпроверка и фиксация котировки\nREST
 pricing --> route : Customer/Supplier\nоценка расстояния и времени\nREST
 route --> fleet : Customer/Supplier\nбронирование ТС и водителя\nREST
-route --> maps : Open Host Service / Conformist\nгеокодинг, путь, матрица расстояний\nREST
+route --> tiles : Open Host Service / Conformist\nгеокодинг, путь, матрица расстояний\nREST
 notification --> fleet : Customer/Supplier\nконтакт водителя\nREST
 
 ' События
@@ -50,7 +55,8 @@ legend right
   Сплошная стрелка: синхронный вызов, от вызывающего к вызываемому
   Пунктирная стрелка: событие Kafka, от издателя к подписчику
   Стереотип: тип поддомена (core, supporting, generic) или внешняя система
-  Maps — внутренний типовой контекст на данных OpenStreetMap, не внешняя система
+  Пунктирная рамка: граница платформы. Map Tiles — внутренний generic-контекст,
+  тайлы клиенты получают через Public Gateway, внешнего картографического провайдера нет
 endlegend
 
 @enduml

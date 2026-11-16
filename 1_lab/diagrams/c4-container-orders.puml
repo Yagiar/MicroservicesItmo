@@ -24,7 +24,7 @@ Boundary(route_group, "Route Service", "одно приложение, два р
 Container(fleet_svc, "Fleet Service", "REST API", "Транспорт, водители, бронирование")
 ContainerDb(fleet_db, "Fleet DB", "PostgreSQL", "Vehicle, Driver, Reservation, outbox")
 
-Container(map_svc, "Map Service", "REST API", "Геокодинг, путь, матрица расстояний")
+Container(map_svc, "Tile Service", "REST API", "Геокодинг, путь, матрица расстояний")
 ContainerQueue(kafka, "Kafka", "Apache Kafka", "shipment.events, route.events, route.planning-requests, fleet.events")
 
 Rel(customer, public_gw, "Стоимость, заказы", "HTTPS")
